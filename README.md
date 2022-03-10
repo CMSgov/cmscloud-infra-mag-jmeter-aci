@@ -42,12 +42,12 @@ Installation of [Azure Credentials](https://plugins.jenkins.io/azure-credentials
 [Azure Service Principal](https://docs.microsoft.com/en-us/azure/active-directory/develop/app-objects-and-service-principals#service-principal-object) for Azure access.
 
 [Azure Container Registry (ACR)](https://azure.microsoft.com/en-us/services/container-registry/) with Admin user enabled. 
-- Set the ACR Name as _jmeteraci_
-- Set the ACR Resource Group name as _jmeter-aci-group_ 
+- Set the ACR Name as `jmeteraci`
+- Set the ACR Resource Group name as `jmeter-aci-group` 
 
 Jenkins Managed Credentials
-- _mag_ : Azure Service Principle (Kind: Azure Credential)
-- _mag-acr_ : The credential for ACR (Kind: Username with password)
+- `mag` : Azure Service Principle (Kind: Azure Credential)
+- `mag-acr` : The credential for ACR (Kind: Username with password)
 
 
 ## Getting Started
@@ -99,9 +99,9 @@ Trigger 'jemter-docker-build' pipeline job. The job builds and pushes JMeter Doc
 ### 5. Run the test
 
 Trigger 'jemter-load-test' pipeline job. The job requires following parameters:
-- ACR_NAME : Name of ACR created for the load test (Default: jmeteraci)
-- ACR_RESOURCE_GROUP : Name of ACR Resource Grouup created for the load test (Default: jmeter-aci-group)
-- WORKS_COUNT: Number of containers to generate synthetic loads (Default: 1)
+- `ACR_NAME` : Name of ACR created for the load test (Default: jmeteraci)
+- `ACR_RESOURCE_GROUP` : Name of ACR Resource Grouup created for the load test (Default: jmeter-aci-group)
+- `WORKS_COUNT`: Number of containers to generate synthetic loads (Default: 1)
 
 
 ## Viewing Test Results
