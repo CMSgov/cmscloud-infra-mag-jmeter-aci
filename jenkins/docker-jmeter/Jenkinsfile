@@ -1,0 +1,75 @@
+/*
+Purpose: Build container image with JMeter and JPGC-plancheck plugins
+         This pipeline is based on pipelines/azure-pipelines.docker.yml
+Build docker image from docker/Dockerfile
+Push the docker image to jmeteraci.azurecr.us/jmeter
+*/
+
+pipeline  {
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    some-label: jmeteraci
+spec:
+  containers:
+  - name: dind
+    image: artifactory.cloud.cms.gov/docker/docker:20.10.12-dind
+    imagePullPolicy: Always
+    tty: true
+    securityContext:
+      privileged: true
+    volumeMounts:
+      - name: docker-graph-storage
+        mountPath: /var/lib/docker
+  volumes:
+    - name: docker-graph-storage
+      emptyDir: {}      
+      
+"""
+    }
+  }
+
+  environment {
+      JMETER_DOCKER_IMAGE = 'jmeter'
+      JMETER_ACR_NAME = 'jmeteraci'
+  }
+  stages{
+    stage('Build') {
+	  steps {
+	    container('dind') {
+          withCredentials([usernamePassword(credentialsId: 'mag-acr', 
+                                            passwordVariable: 'PASS', 
+                                            usernameVariable: 'USER')]) {
+            sh '''
+              docker login ${JMETER_ACR_NAME}.azurecr.us -u ${USER} -p ${PASS}
+              docker build -t ${JMETER_DOCKER_IMAGE}:latest docker
+              docker logout
+            '''
+          }
+        }
+      }
+    }
+    stage('Push') {
+      steps {
+        container('dind') {
+          withCredentials([usernamePassword(credentialsId: 'mag-acr', 
+                                            passwordVariable: 'PASS', 
+                                            usernameVariable: 'USER')]) {
+            sh '''
+              docker login ${JMETER_ACR_NAME}.azurecr.us -u ${USER} -p ${PASS}            
+              docker tag ${JMETER_DOCKER_IMAGE} ${JMETER_ACR_NAME}.azurecr.us/${JMETER_DOCKER_IMAGE}:latest
+              docker tag ${JMETER_DOCKER_IMAGE} ${JMETER_ACR_NAME}.azurecr.us/${JMETER_DOCKER_IMAGE}:${BUILD_NUMBER}
+              docker push ${JMETER_ACR_NAME}.azurecr.us/${JMETER_DOCKER_IMAGE}:latest              
+              docker push ${JMETER_ACR_NAME}.azurecr.us/${JMETER_DOCKER_IMAGE}:${BUILD_NUMBER}
+              docker logout
+            '''
+          }
+        }
+      }
+    }   
+  }  
+}  

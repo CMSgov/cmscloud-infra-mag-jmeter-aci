@@ -1,0 +1,267 @@
+/*
+Purpose: Create infrastructure for JMeter load testing, execute the test, and destroy after the execution.
+         This pipeline is based on pipelines/azure-pipelines.load-test.yml
+
+*/
+
+pipeline  {
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    some-label: jmeter-aci
+spec:
+  containers:
+  - name: terraform-az
+    image: artifactory.cloud.cms.gov/jmeter-aci-docker-local/azcli-tf:latest
+    imagePullPolicy: Always
+    tty: true
+    command:
+    - cat
+"""
+    }
+  }
+
+  environment {
+      JMETER_DOCKER_IMAGE = 'jmeter'                    
+      // JMETER_ACR_NAME = 'jmeteraci'    					// parametrized             
+      // JMETER_ACR_RESOURCE_GROUP = 'jmeter-aci-group'   	// parametrized        
+      JMETER_RESOURCE_GROUP = 'jmetergroup'
+      // JMETER_WORKERS_COUNT = '3'							// parametrized
+  }  
+  parameters {
+    string(
+	  name: 'ACR_NAME', 
+	  defaultValue: 'jmeteraci', 
+	  description: 'Name of Azure Container Registry (ACR) created as the pre-requsite'
+	)
+    string(
+	  name: 'ACR_RESOURCE_GROUP', 
+	  defaultValue: 'jmeter-aci-group', 
+	  description: 'Name of ACR Resource Group created as the pre-requsite'
+	)  
+    choice(
+      name: 'WORKERS_COUNT', 
+      choices: [ '1', '2', '3','4','5','6','7','8','9','10',
+                 '11', '12', '13','14','15','16','17','18','19','20',
+                 '21', '22', '23','24','25','26','27','28','29','30',
+                 '31', '32', '33','34','35','36','37','38','39','40',
+                 '41', '42', '43','44','45','46','47','48','49','50' ], 
+      description: 'Number of containers to generate synthetic loads'
+	)
+  }  
+  stages {
+    stage('Check utils') {
+	  steps {
+	    container('terraform-az') {
+  	      sh '''
+		    azcopy --version
+		    az --version
+		    terraform --version
+		    python3 --version
+
+			echo "Container Registry Name: ${ACR_NAME}"
+			echo "ACR Resource Group Name: ${ACR_RESOURCE_GROUP}"
+			echo "Number of Worker Node: ${WORKERS_COUNT}"
+			
+			mkdir -p output
+		  '''
+        }
+      }
+    }
+    stage('Create storage') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+		      cd terraform
+		      
+		      export ARM_CLIENT_ID="${CLIENT_ID}"
+		      export ARM_CLIENT_SECRET="${CLIENT_SECRET}"
+		      export ARM_TENANT_ID="${TENANT_ID}"
+		      export ARM_SUBSCRIPTION_ID="${SUBS_ID}"
+		      export ARM_ENVIRONMENT="usgovernment"
+		      
+		      az cloud set --name AzureUSGovernment
+		      az login --service-principal -u ${CLIENT_ID} -p ${CLIENT_SECRET} --tenant ${TENANT_ID}
+		      
+              if [ "$(az group exists --resource-group ${JMETER_RESOURCE_GROUP})" == "true" ]; then
+                az group delete --name ${JMETER_RESOURCE_GROUP} --yes
+              fi
+
+		      terraform init
+              terraform apply -target azurerm_storage_share.jmeter_share \
+                              -var "RESOURCE_GROUP_NAME=${JMETER_RESOURCE_GROUP}" \
+                              -var "JMETER_JMX_FILE=sample.jmx" \
+                              -var "LOCATION=usgovvirginia" \
+                              -auto-approve		      
+
+		    '''
+          }
+        }
+      }
+    }
+    stage('Upload jmx') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+              cd terraform	    
+              export AZCOPY_SPA_CLIENT_SECRET="${CLIENT_SECRET}"
+              
+              FTIME="$(( `date -u +%s`+30*60 ))" && SAS_END=`date -u -d@"${FTIME}" '+%Y-%m-%dT%H:%MZ'`
+
+              JMETER_SAS=`az storage share generate-sas -n jmeter --account-name "$(terraform output -raw storage_account_name)" --account-key "$(terraform output -raw storage_account_key)" --https-only --permissions dlrw --expiry $SAS_END -o tsv`              
+              azcopy cp "../jmeter/*.jmx" $(terraform output -raw storage_file_share_url)?$JMETER_SAS --recursive
+              
+		    '''
+          }
+        }
+      }
+    }
+    stage('Run test') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+              cd terraform
+              
+              az cloud set --name AzureUSGovernment
+		      az login --service-principal -u ${CLIENT_ID} -p ${CLIENT_SECRET} --tenant ${TENANT_ID}
+		      
+		      export ARM_CLIENT_ID="${CLIENT_ID}"
+		      export ARM_CLIENT_SECRET="${CLIENT_SECRET}"
+		      export ARM_TENANT_ID="${TENANT_ID}"
+		      export ARM_SUBSCRIPTION_ID="${SUBS_ID}"
+		      export ARM_ENVIRONMENT="usgovernment"
+		      
+              terraform apply -var "JMETER_DOCKER_IMAGE=${ACR_NAME}.azurecr.us/${JMETER_DOCKER_IMAGE}:latest" \
+                              -var "JMETER_ACR_RESOURCE_GROUP_NAME=${ACR_RESOURCE_GROUP}" \
+                              -var "JMETER_ACR_NAME=${ACR_NAME}" \
+                              -var "JMETER_WORKERS_COUNT=${WORKERS_COUNT}" \
+                              -var "RESOURCE_GROUP_NAME=${JMETER_RESOURCE_GROUP}" \
+                              -var "JMETER_JMX_FILE=sample.jmx" \
+                              -var "LOCATION=usgovvirginia" \
+                              -auto-approve			      
+		    '''
+          }
+        }
+      }
+    }
+    stage('Wait test') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+              cd terraform
+              
+              RG="$(terraform output -raw resource_group_name)"
+              NAME="$(terraform output -raw jmeter_controller_name)"
+              
+              echo "`date`: Started!"
+              
+              while [ "$(az container show -g $RG -n $NAME --query "containers[0].instanceView.currentState.state" -o tsv)" == "Running" ]; do
+                echo "`date`: Still Running..."
+                sleep 20
+              done
+              echo "`date`: Finished!"	      
+		    '''
+          }
+        }
+      }
+    }       
+    stage('Collect logs') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+              cd terraform
+              
+              az container logs -g $(terraform output -raw resource_group_name) -n $(terraform output -raw jmeter_controller_name)
+              RESOURCE_GROUP="$(terraform output -raw resource_group_name)"
+              echo -n "$(terraform output -raw jmeter_workers_names)" | tr , '\\n' | xargs -t -I '{}' -n1 az container logs -g $RESOURCE_GROUP -n {}
+		    '''
+          }
+        }
+      }
+    }  
+    stage('Get artifacts') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+              cd terraform
+              
+              export AZCOPY_SPA_CLIENT_SECRET="${CLIENT_SECRET}"
+              
+              FTIME="$(( `date -u +%s`+30*60 ))" && SAS_END=`date -u -d@"${FTIME}" '+%Y-%m-%dT%H:%MZ'`
+              
+              JMETER_SAS=`az storage share generate-sas -n jmeter --account-name "$(terraform output -raw storage_account_name)" --account-key "$(terraform output -raw storage_account_key)" --https-only --permissions dlrw --expiry $SAS_END -o tsv`
+              azcopy cp $(terraform output -raw storage_file_share_url)?$JMETER_SAS ../output --recursive		      
+		    '''
+          }
+        }
+      }
+    }
+    
+    stage('JUnit format') {
+	  steps {
+	    container('terraform-az') {
+		  sh '''
+		    cd terraform
+            JMETER_RESULTS=../output/jmeter/$(terraform output -raw jmeter_results_file)
+            python3 ../scripts/jtl_junit_converter.py ${JMETER_RESULTS} ../output/output.xml	      
+		  '''
+        }
+      }
+    } 
+
+    stage('Publish') {
+	  steps {
+	    // junit skipPublishingChecks: true, testResults: 'output/output.xml'
+	    perfReport filterRegex: '', ignoreUnstableBuilds: true, showTrendGraphs: true, sourceDataFiles: '**/*.jtl'
+	    
+      }
+    }        
+    
+    stage('Tear down') {
+	  steps {
+	    container('terraform-az') {
+	      withCredentials([azureServicePrincipal(credentialsId: 'mag', subscriptionIdVariable: 'SUBS_ID',
+            clientIdVariable: 'CLIENT_ID', clientSecretVariable: 'CLIENT_SECRET', tenantIdVariable: 'TENANT_ID')]) {
+		    sh '''
+              cd terraform
+              
+              az cloud set --name AzureUSGovernment
+		      az login --service-principal -u ${CLIENT_ID} -p ${CLIENT_SECRET} --tenant ${TENANT_ID}
+		      
+		      export ARM_CLIENT_ID="${CLIENT_ID}"
+		      export ARM_CLIENT_SECRET="${CLIENT_SECRET}"
+		      export ARM_TENANT_ID="${TENANT_ID}"
+		      export ARM_SUBSCRIPTION_ID="${SUBS_ID}"
+		      export ARM_ENVIRONMENT="usgovernment"
+		      
+              terraform destroy -var "JMETER_DOCKER_IMAGE=${ACR_NAME}.azurecr.us/${JMETER_DOCKER_IMAGE}:latest" \
+                              -var "JMETER_ACR_RESOURCE_GROUP_NAME=${ACR_RESOURCE_GROUP}" \
+                              -var "JMETER_ACR_NAME=${ACR_NAME}" \
+                              -var "JMETER_WORKERS_COUNT=${WORKERS_COUNT}" \
+                              -var "RESOURCE_GROUP_NAME=${JMETER_RESOURCE_GROUP}" \
+                              -var "JMETER_JMX_FILE=sample.jmx" \
+                              -var "LOCATION=usgovvirginia" \
+                              -auto-approve			      
+		    '''
+          }
+        }
+      }
+    }      
+  }
+}  
