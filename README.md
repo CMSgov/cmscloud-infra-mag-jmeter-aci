@@ -1,36 +1,20 @@
----
-page_type: sample
-languages:
-- yaml
-- python
-products:
-- azure
-- azure-devops
-- azure-storage
-extensions:
-  services: Containerinstance
-name: Load Testing Pipeline with JMeter, ACI and Terraform
-description: "Azure Pipeline that provisions JMeter on Azure Container Instance using Terraform for load testing scenarios"
-urlFragment: "jmeter-aci-terraform"
----
+# Microsoft Azure Government (MAG) Load Testing Pipeline with JMeter, ACI and Terraform
 
-# ATTENTION: This project was archived. Please consider using [Azure Load Testing service](https://azure.microsoft.com/en-us/services/load-testing/). 
+This project is a load testing pipeline that leverages [Apache JMeter](https://jmeter.apache.org/) as an open source load and performance testing tool and [Terraform](https://www.terraform.io/)to dynamically provision and destroy the required infrastructure on MAG.
 
-# Load Testing Pipeline with JMeter, ACI and Terraform
-
-This project is a load testing pipeline that leverages [Apache JMeter](https://jmeter.apache.org/) as an open source load and performance testing tool and [Terraform](https://www.terraform.io/) to dynamically provision and destroy the required infrastructure on Azure.
+This solution is developed by Microsoft, and customized by CMS Cloud so that the testing can be triggered from the CloudBees CI Jenkins pipeline.
 
 ## Key concepts
 
-![Architecture](./docs/img/architecture.png)
+![Architecture](./docs/img/architecture_cloudbees.png)
 
-The flow is triggered and controlled by an [Azure Pipeline](https://azure.microsoft.com/en-us/services/devops/pipelines/) on [Azure DevOps](https://azure.microsoft.com/en-in/services/devops/). The pipeline contains a set of tasks that are organized logically in `SETUP`, `TEST`, `RESULTS` and `TEARDOWN` groups.
+The flow is triggered and controlled by an CloudBees CI pipeline. The pipeline contains a set of tasks that are organized logically in `SETUP`, `TEST`, `RESULTS` and `TEARDOWN` groups.
 
 | Task group              | Tasks  |
 |-------------------------|--------|
-| SETUP | <li>Check if the JMeter Docker image exists</li><li>Validate the JMX file that contains the JMeter test definition</li><li>Upload JMeter JMX file to Azure Storage Account File Share</li><li>Provision the infrastructure with Terraform</li> |
+| SETUP | <li>Validate the JMX file that contains the JMeter test definition</li><li>Upload JMeter JMX file to Azure Storage Account File Share</li><li>Provision the infrastructure with Terraform</li> |
 | TEST | <li>Run JMeter test execution and wait for completion</li> |
-| RESULTS | <li>Show JMeter logs</li><li>Get JMeter artifacts (e.g. logs, dashboard)</li><li>Convert JMeter tests result (JTL format) to JUnit format</li><li>Publish JUnit test results to Azure Pipelines</li><li>Publish JMeter artifacts to Azure Pipelines</li> |
+| RESULTS | <li>Show JMeter logs</li><li>Get JMeter artifacts (e.g. logs, dashboard)</li><li>Publish JMeter artifacts to CloudBees Pipelines</li> |
 | TEARDOWN | <li>Destroy all ephemeral infrastructure with Terraform</li> |
 
 On the `SETUP` phase, JMeter agents are provisioned as [Azure Container Instance (ACI)](https://azure.microsoft.com/en-us/services/container-instances/) using a [custom Docker image](./docker/Dockerfile) on Terraform. Through a [Remote Testing](https://jmeter.apache.org/usermanual/remote-test.html) approach, JMeter controller is responsible to configure all workers, consolidating all results and generating the resulting artifacts (dashboard, logs, etc).
@@ -43,171 +27,86 @@ The infrastructure provisioned by Terraform includes:
 * 1 JMeter controller on ACI
 * N JMeter workers on ACI
 
-On the `RESULTS` phase, a [JMeter Report Dashboard](https://jmeter.apache.org/usermanual/generating-dashboard.html) and [Tests Results](https://docs.microsoft.com/en-us/azure/devops/pipelines/test/review-continuous-test-results-after-build?view=azure-devops) are published in the end of each load testing execution.
+On the `RESULTS` phase, a JMeter report file (results.jtl) is published in the end of each load testing execution.
 
 ## Prerequisites
 
-You should have the following tools installed:
+Access to [CMS Cloud MAG Load Testing](https://github.com/CMSgov/cmscloud-infra-mag-jmeter-aci) repository.
 
-* Shell
-* [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest)
-* [Azure DevOps CLI extension](https://docs.microsoft.com/en-us/azure/devops/cli/?view=azure-devops)
-* [jq](https://stedolan.github.io/jq/download/)
+Access to Cloudbees Jenkins instance.
 
-You should have the following Azure resources:
+_Azure subscription_ for creating and tearing down the load-test solution.
 
-* [Azure DevOps Project](https://docs.microsoft.com/en-us/azure/devops/organizations/projects/create-project?view=azure-devops&tabs=preview-page)
-* [Azure Container Registry (ACR)](https://azure.microsoft.com/en-us/services/container-registry/) with Admin user enabled
+Installation of [Azure Credentials](https://plugins.jenkins.io/azure-credentials/) plugin to the Jenkins instance.
+
+[Azure Service Principal](https://docs.microsoft.com/en-us/azure/active-directory/develop/app-objects-and-service-principals#service-principal-object) for Azure access.
+
+[Azure Container Registry (ACR)](https://azure.microsoft.com/en-us/services/container-registry/) with Admin user enabled. 
+- Set the ACR Name as _jmeteraci_
+- Set the ACR Resource Group name as _jmeter-aci-group_ 
+
+Jenkins Managed Credentials
+- _mag_ : Azure Service Principle (Kind: Azure Credential)
+- _mag-acr_ : The credential for ACR (Kind: Username with password)
+
 
 ## Getting Started
 
-### 1. Importing this repository to Azure DevOps
+### 1. Fork this repository
 
-Log in to Azure through Azure CLI:
+A fork is a copy of a repository. Forking a repository allows you to freely experiment with changes without affecting the original repository. Please follow the [Fork a repo]( https://docs.github.com/en/get-started/quickstart/fork-a-repo) instruction and fork the following repository:
 
-```sh
-az login
+- https://github.com/CMSgov/cmscloud-infra-mag-jmeter-aci
+
+### 2. Create Jenkins pipeline jobs
+
+Log on to the Jenkins instance
+
+Create 'jmeter-docker-build' pipeline job as below :
+```
+Pipeline
+  Definition : Pipeline script from SCM
+	SCM : Git 
+	  Repositories
+	    Repository URL : https://github.com/CMSgov/cmscloud-infra-mag-jmeter-aci (or your forked repository)
+		Credentials : (your credential to https://github.com/CMSgov)
+	  Branches to build
+		Branch Specifier : */main
+	Script Path : jenkins/docker-jmeter/Jenkinsfile
 ```
 
-> NOTE: Make sure you are using the correct subscription. You can use `az account show` to display what is the current selected one and [`az account set`](https://docs.microsoft.com/en-us/cli/azure/account?view=azure-cli-latest#az-account-set) to change it.
-
-Configure Azure DevOps CLI with your organization/project settings:
-
-```shell
-ORGANIZATION_URL=https://dev.azure.com/your-organization
-PROJECT_NAME=YourProject
-
-az devops configure --defaults organization=$ORGANIZATION_URL project=$PROJECT_NAME
+Create 'jmeter-load-test' pipeline job as below:
+```
+Pipeline
+  Definition : Pipeline script from SCM
+	SCM : Git 
+	  Repositories
+	    Repository URL : https://github.com/CMSgov/cmscloud-infra-mag-jmeter-aci (or your forked repository)
+		Credentials : (your credential to https://github.com/CMSgov)
+	  Branches to build
+		Branch Specifier : */main
+	Script Path : jenkins/load-test/Jenkinsfile
 ```
 
-Import this repository on your Azure DevOps project:
-
-```shell
-REPOSITORY_NAME=jmeter-load-test
-REPOSITORY_URL=https://github.com/Azure-Samples/jmeter-aci-terraform
-
-az repos create --name $REPOSITORY_NAME
-az repos import create --git-source-url $REPOSITORY_URL --repository $REPOSITORY_NAME
-```
-
-### 2. Configuring Azure credentials
-
-Create an [Azure service principal](https://docs.microsoft.com/en-us/azure/active-directory/develop/app-objects-and-service-principals#service-principal-object):
-
-```shell
-SERVICE_PRINCIPAL_NAME=JMeterServicePrincipal
-
-SERVICE_PRINCIPAL=$(az ad sp create-for-rbac --name $SERVICE_PRINCIPAL_NAME)
-```
-
-Run the following commands to fill the credentials variables:
-
-```shell
-CLIENT_ID=$(echo $SERVICE_PRINCIPAL | jq -r .appId)
-CLIENT_SECRET=$(echo $SERVICE_PRINCIPAL | jq -r .password)
-TENANT_ID=$(echo $SERVICE_PRINCIPAL | jq -r .tenant)
-SUBSCRIPTION_ID=$(az account show | jq -r .id)
-SUBSCRIPTION_NAME=$(az account show | jq -r .name)
-```
-
-Create an Azure [service connection](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/service-endpoints?view=azure-devops&tabs=yaml) on Azure DevOps:
-
-```shell
-SERVICE_CONNECTION_NAME=JMeterAzureConnection
-
-export AZURE_DEVOPS_EXT_AZURE_RM_SERVICE_PRINCIPAL_KEY=$CLIENT_SECRET
-
-SERVICE_ENDPOINT_ID=$(az devops service-endpoint azurerm create --azure-rm-service-principal-id $CLIENT_ID \
-                        --azure-rm-subscription-id $SUBSCRIPTION_ID --azure-rm-subscription-name $SUBSCRIPTION_NAME  \
-                        --azure-rm-tenant-id $TENANT_ID --name $SERVICE_CONNECTION_NAME | jq -r .id)
-
-az devops service-endpoint update --id $SERVICE_ENDPOINT_ID --enable-for-all true
-```
-
-### 3. Creating the Variable Group
-
-Set the following variables according to your Azure Container Registry instance:
-
-```shell
-ACR_NAME=
-ACR_RESOURCE_GROUP=
-```
-
-Run the following commands to create the variable group `JMETER_TERRAFORM_SETTINGS` on Azure DevOps:
-
-```shell
-az pipelines variable-group create  --name JMETER_TERRAFORM_SETTINGS --authorize \
-                                    --variables TF_VAR_JMETER_ACR_NAME=$ACR_NAME \
-                                                TF_VAR_JMETER_ACR_RESOURCE_GROUP_NAME=$ACR_RESOURCE_GROUP \
-                                                TF_VAR_JMETER_DOCKER_IMAGE=$ACR_NAME.azurecr.io/jmeter \
-                                                AZURE_SERVICE_CONNECTION_NAME="$SERVICE_CONNECTION_NAME" \
-                                                AZURE_SUBSCRIPTION_ID=$SUBSCRIPTION_ID
-```
-
-### 4. Creating and Running the Docker Pipeline
-
-```shell
-PIPELINE_NAME_DOCKER=jmeter-docker-build
-
-az pipelines create --name $PIPELINE_NAME_DOCKER --repository $REPOSITORY_NAME \
-    --repository-type tfsgit --branch main \
-    --yml-path pipelines/azure-pipelines.docker.yml
-```
-
-### 5. Creating the JMeter Pipeline
-
-```shell
-PIPELINE_NAME_JMETER=jmeter-load-test
-
-az pipelines create --name $PIPELINE_NAME_JMETER --repository $REPOSITORY_NAME \
-    --repository-type tfsgit --branch main --skip-first-run \
-    --yml-path pipelines/azure-pipelines.load-test.yml
-
-az pipelines variable create --pipeline-name $PIPELINE_NAME_JMETER --name TF_VAR_JMETER_JMX_FILE --allow-override
-az pipelines variable create --pipeline-name $PIPELINE_NAME_JMETER --name TF_VAR_JMETER_WORKERS_COUNT --allow-override
-```
-
-### 6. Updating the JMX test definition (optional)
+### 3. Updating the JMX test definition (optional)
 
 By default the test uses [`sample.jmx`](./jmeter/sample.jmx). This JMX file contains a test definition for performing HTTP requests on `azure.microsoft.com` endpoint through the `443` port. You can simply update the it with the test definition of your preference.
 
-### 7. Manually Running the JMeter Pipeline
+### 4. Build the JMeter Docker image 
 
-You can choose the JMeter file you want to run and how many JMeter workers you will need for your test. Then you can run the JMeter pipeline using the CLI:
+Trigger 'jemter-docker-build' pipeline job. The job builds and pushes JMeter Docker image to Azure Container Registry
 
-```shell
-JMETER_JMX_FILE=sample.jmx
-JMETER_WORKERS_COUNT=1
+### 5. Run the test
 
-az pipelines run --name $PIPELINE_NAME_JMETER \
-                 --variables TF_VAR_JMETER_JMX_FILE=$JMETER_JMX_FILE TF_VAR_JMETER_WORKERS_COUNT=$JMETER_WORKERS_COUNT
-```
+Trigger 'jemter-load-test' pipeline job. The job requires following parameters:
+- ACR_NAME : Name of ACR created for the load test (Default: jmeteraci)
+- ACR_RESOURCE_GROUP : Name of ACR Resource Grouup created for the load test (Default: jmeter-aci-group)
+- WORKS_COUNT: Number of containers to generate synthetic loads (Default: 1)
 
-Or even use the UI to define variables and Run the pipeline:
-
-![ui-run-pipeline](./docs/img/ui-run-pipeline.png)
 
 ## Viewing Test Results
 
-JMeter test results are created in a [JTL](https://cwiki.apache.org/confluence/display/JMETER/JtlFiles) file (`results.jtl`) with CSV formatting. A [Python script](https://github.com/Azure-Samples/jmeter-aci-terraform/blob/main/scripts/jtl_junit_converter.py) was created to convert JTL to [JUnit format](https://llg.cubic.org/docs/junit/) and used during the pipeline to have full integration with Azure DevOps test visualization.
-
-![Azure DevOps with successful requests](./docs/img/azdo-test-results-success.jpg)
-
-Error messages generated by JMeter for failed HTTP requests can also be seen on Azure DevOps.
-
-![Azure DevOps with failed requests](./docs/img/azdo-test-results-fail.jpg)
-
-## Viewing Artifacts
-
-Some artifacts are published after the test ends. Some of them are a static JMeter Dashboard, logs and others.
-
-![pipeline-artifacts](./docs/img/pipeline-artifacts.png)
-
-> You can also download these build artifacts using [`az pipelines runs artifact download`](https://docs.microsoft.com/en-us/cli/azure/ext/azure-devops/pipelines/runs/artifact?view=azure-cli-latest#ext-azure-devops-az-pipelines-runs-artifact-download).
-
-After downloading the dashboard and unzipping it, open `dashboard/index.html` on your browser:
-
-![jmeter-dashboard](./docs/img/jmeter-dashboard.png)
+JMeter test results are created in a [JTL](https://cwiki.apache.org/confluence/display/JMETER/JtlFiles) file (`results.jtl`) with CSV formatting. The file is published upon completion of the load test execution. 
 
 ## Pipeline Configuration
 
